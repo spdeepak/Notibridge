@@ -13,6 +13,60 @@ code signing certificate and no notarization are involved.
 - Optionally the repository secret `UPDATE_SIGNING_KEY` (see
   [Signing](#signing)).
 
+## Quick start
+
+```bash
+# 1. bump the version (the one source of truth)
+sed -i '' 's/var Version = "0.1.0"/var Version = "0.2.0"/' internal/app/service.go
+
+# 2. check locally
+make check && make bundle
+
+# 3. commit, push, tag, push the tag
+git commit -am "Release 0.2.0"
+git push origin release-phase
+git tag v0.2.0
+git push origin v0.2.0      # <- this triggers the workflow
+```
+
+Pushing the tag starts the **Release** workflow on
+<https://github.com/spdeepak/Notibridge/actions>, which builds the archives,
+writes the checksums, signs them and publishes the GitHub Release. Watch it in
+the Actions tab — the workflow uses the runner's own `gh`, so the GitHub CLI
+does not have to be installed on your machine.
+
+## Releasing from the GitHub web UI (no terminal)
+
+Everything below happens in the browser. The version bump must exist in the
+tagged commit, so the first step is a commit made through GitHub's file
+editor.
+
+1. **Bump the version.** Open `internal/app/service.go` on the `release-phase`
+   branch on GitHub → click the pencil → change
+   `var Version = "0.1.0"` to the new version → *Commit changes* directly to
+   `release-phase`.
+2. **Let CI check it.** The *CI* workflow runs on that push
+   (`release-phase` is in its branch list). Wait for it to go green. You can
+   also start it by hand: *Actions → CI → Run workflow → branch
+   `release-phase`*.
+3. **Create a draft release.** *Releases → Draft a new release*. Choose
+   `release-phase` in the branch dropdown, type the new tag (for example
+   `v0.2.0`) in the tag field, add a title, then *Create draft*.
+   **The tag is created here — that tag push is what starts the workflow.**
+4. **Watch the workflow finish.** *Actions → Release*. It builds the archives,
+   writes the checksums, signs them, uploads everything to the draft release
+   and publishes it.
+5. The release appears on the Releases page with the archives attached.
+
+Do not press *Publish release* yourself in step 3 — the workflow publishes it
+once the assets are attached. (If you do publish it early, the workflow fills
+in the existing release instead of failing; the assets land on the release you
+published.)
+
+Note that the version check in the workflow compares the tag with the version
+in the tagged commit, so the bump from step 1 has to be part of the commit the
+tag points at.
+
 ## Versioning
 
 The version lives in one place: `internal/app/service.go`.
@@ -39,12 +93,14 @@ make bundle
 # 3. commit, tag and push
 git add internal/app/service.go
 git commit -m "Release 0.2.0"
+git push origin release-phase      # the branch you release from
 git tag v0.2.0
-git push origin main
-git push origin v0.2.0
+git push origin v0.2.0             # <- this triggers the workflow
 ```
 
-The push of the tag triggers `.github/workflows/release.yml`.
+The push of the tag triggers `.github/workflows/release.yml`. Push the commit
+**before** the tag: the workflow checks out the tagged commit and compares its
+version against the tag.
 
 Versions follow [SemVer](https://semver.org/): `MAJOR.MINOR.PATCH`, with an
 optional `-suffix` for pre-releases (`v0.2.0-rc.1`). Pre-releases are tagged
@@ -80,17 +136,21 @@ Generate the key pair once, on your own machine:
 # private key (keep this secret, never commit it)
 openssl genpkey -algorithm ed25519 -out update_key.pem
 
-# the value to store as the UPDATE_SIGNING_KEY repository secret
-openssl pkey -in update_key.pem -outform DER | tail -c 32 | base64 | tr -d '\n'
+# the base64 seed: this is the value of the UPDATE_SIGNING_KEY secret, and
+# the key file that scripts/sign_release reads
+openssl pkey -in update_key.pem -outform DER | tail -c 32 | base64 | tr -d '\n' > update_key.b64
 
 # the public key to embed (the workflow derives it itself from the secret)
-go run ./scripts/sign_release pubkey update_key.pem
+go run ./scripts/sign_release pubkey update_key.b64
 ```
 
-Store the base64 seed as the repository secret **UPDATE_SIGNING_KEY**
-(*Settings → Secrets and variables → Actions → New repository secret*). The
-workflow derives the public key from it and passes it to the build, so the
-public key never has to be stored separately.
+`sign_release` reads a **base64** key file (the 32-byte seed or the 64-byte
+private key) — it does not read PEM files.
+
+Store the content of `update_key.b64` as the repository secret
+**UPDATE_SIGNING_KEY** (*Settings → Secrets and variables → Actions → New
+repository secret*). The workflow derives the public key from it and passes it
+to the build, so the public key never has to be stored separately.
 
 Without the secret the workflow still publishes `SHA256SUMS` — but without a
 signature. Installed builds that embed a public key then refuse to update,
