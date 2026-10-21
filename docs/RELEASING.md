@@ -219,3 +219,22 @@ committed, so a normal build does not need `iconutil`.
 2. Download one of the published archives and check that it opens.
 3. Install it on a second Mac and confirm the Gatekeeper warning is the one
    described in [docs/INSTALL.md](INSTALL.md).
+
+## If the release shows only "Source code (zip)"
+
+Every GitHub Release offers *Source code (zip)* and *Source code (tar.gz)*.
+Those are snapshots of the **repository**, not the application — the
+application archives (`NotiBridge_<version>_arm64.zip`) are attached by the
+workflow.
+
+If only the source archives are offered, the workflow uploaded nothing: open
+the **Release** run in the Actions tab and read the failed step. The usual
+cause is a tag that disagrees with the version in `internal/app/service.go` —
+the workflow refuses to publish a release whose version would differ from the
+source, so the version has to be bumped *before* the tag is created:
+
+```bash
+sed -i '' 's/var Version = "1.0.0"/var Version = "1.0.1"/' internal/app/service.go
+git commit -am "Release 1.0.1" && git push origin main
+git tag v1.0.1 && git push origin v1.0.1
+```

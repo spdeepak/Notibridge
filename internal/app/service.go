@@ -31,7 +31,7 @@ import (
 )
 
 // Version is the application version, overridable at link time.
-var Version = "0.1.0"
+var Version = "1.0.0"
 
 const watermarkMetaKey = "source_watermark"
 
