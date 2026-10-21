@@ -269,7 +269,9 @@ func Format(n notifications.Notification) string {
 	var b strings.Builder
 	b.WriteString("🔔 <b>macOS Notification</b>\n")
 	if n.AppID != "" {
-		b.WriteString("<b>App:</b> " + esc(n.AppID) + "\n")
+		appLocation := strings.Split(esc(n.AppID), ".")
+		appName := appLocation[len(appLocation)-1]
+		b.WriteString("<b>App:</b> " + appName + "\n")
 	}
 	if n.Title != "" {
 		b.WriteString("<b>Title:</b> " + esc(n.Title) + "\n")
