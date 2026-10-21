@@ -238,3 +238,14 @@ sed -i '' 's/var Version = "1.0.0"/var Version = "1.0.1"/' internal/app/service.
 git commit -am "Release 1.0.1" && git push origin main
 git tag v1.0.1 && git push origin v1.0.1
 ```
+
+The same happens if someone deletes the uploaded assets in the release editor.
+*Insights → Audit log* shows who changed the release. To put them back,
+re-run the workflow by pushing the tag again — note that **deleting a tag
+also deletes its release**, so the workflow recreates the release from
+scratch (same tag, same notes, freshly uploaded assets):
+
+```bash
+git push origin :refs/tags/v1.0.1   # delete the tag
+git push origin v1.0.1              # push it again -> the workflow re-runs
+```
