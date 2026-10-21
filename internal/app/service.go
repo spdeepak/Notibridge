@@ -24,8 +24,10 @@ import (
 	"github.com/spdeepak/notibridge/internal/notifications/parser"
 	"github.com/spdeepak/notibridge/internal/notifications/source"
 	"github.com/spdeepak/notibridge/internal/queue"
+	"github.com/spdeepak/notibridge/internal/screenlock"
 	"github.com/spdeepak/notibridge/internal/storage"
 	"github.com/spdeepak/notibridge/internal/telegram"
+	"github.com/spdeepak/notibridge/internal/update"
 )
 
 // Version is the application version, overridable at link time.
@@ -45,6 +47,17 @@ type Options struct {
 	Secrets config.SecretStore
 	// TelegramBaseURL overrides the Bot API endpoint (tests).
 	TelegramBaseURL string
+	// UpdateOwner and UpdateRepo identify the GitHub repository whose
+	// releases are checked for updates.
+	UpdateOwner string
+	UpdateRepo  string
+	// UpdateAPIBaseURL overrides the GitHub API root (tests).
+	UpdateAPIBaseURL string
+	// UpdateHTTPClient overrides the HTTP client used by the updater (tests).
+	UpdateHTTPClient *http.Client
+	// LockState reports whether the screen is locked. nil selects the live
+	// macOS screen lock state; tests inject a fake.
+	LockState screenlock.State
 }
 
 // Status is a snapshot of service state for the UI.
@@ -66,6 +79,11 @@ type Status struct {
 	LastSleepGap      time.Time
 	RecordsSeen       int64
 	RecordsQueued     int64
+	// ScreenLocked is the last observed screen lock state.
+	ScreenLocked bool
+	// OnlyWhenScreenLocked mirrors the setting that restricts forwarding to
+	// notifications that arrive while the screen is locked.
+	OnlyWhenScreenLocked bool
 }
 
 // Service coordinates the notification pipeline.
@@ -78,6 +96,7 @@ type Service struct {
 	secrets config.SecretStore
 	httpc   *http.Client
 	tgBase  string
+	lock    screenlock.State
 
 	mu     sync.Mutex
 	cfg    config.Config
@@ -90,6 +109,18 @@ type Service struct {
 	wakeCh chan struct{}
 
 	paused atomic.Bool
+
+	// screenLocked is the last observed screen lock state, for the UI.
+	screenLocked atomic.Bool
+
+	// Release-based self-update.
+	upd      *update.Updater
+	updMu    sync.Mutex
+	updState UpdateState
+
+	// QuitRequested is closed when a frontend asks the application to stop.
+	quitCh   chan struct{}
+	quitOnce sync.Once
 
 	// Observability for the UI.
 	srcAccessible atomic.Bool
@@ -143,6 +174,11 @@ func New(opts Options) (*Service, error) {
 		own = true
 	}
 
+	lock := opts.LockState
+	if lock == nil {
+		lock = screenlock.MacOS()
+	}
+
 	s := &Service{
 		logger:  opts.Logger,
 		src:     src,
@@ -155,8 +191,11 @@ func New(opts Options) (*Service, error) {
 		cfg:     cfg,
 		filter:  filters.New(cfg.ExcludedApps),
 		token:   token,
+		lock:    lock,
 		wakeCh:  make(chan struct{}, 1),
+		quitCh:  make(chan struct{}),
 	}
+	s.upd = newUpdater(opts.Logger, opts)
 	if s.tgBase == "" {
 		s.tgBase = telegram.DefaultBaseURL
 	}
@@ -216,6 +255,16 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	return err
 }
 
+// RequestQuit asks the frontends to shut the application down. It is used
+// after an update was installed: the update helper waits for this process to
+// exit before it replaces the application bundle.
+func (s *Service) RequestQuit() {
+	s.quitOnce.Do(func() { close(s.quitCh) })
+}
+
+// QuitRequested returns a channel that is closed when a quit was requested.
+func (s *Service) QuitRequested() <-chan struct{} { return s.quitCh }
+
 // ---- configuration ----
 
 // ConfigUpdate describes a requested configuration change. A nil BotToken
@@ -228,6 +277,7 @@ type ConfigUpdate struct {
 	ExcludedApps         []string
 	HistoryRetentionDays int
 	MaxAttempts          int
+	OnlyWhenScreenLocked bool
 }
 
 // ApplyConfig validates, persists and applies a configuration update. The
@@ -241,6 +291,7 @@ func (s *Service) ApplyConfig(ctx context.Context, upd ConfigUpdate) error {
 		ExcludedApps:         upd.ExcludedApps,
 		HistoryRetentionDays: upd.HistoryRetentionDays,
 		MaxAttempts:          upd.MaxAttempts,
+		OnlyWhenScreenLocked: upd.OnlyWhenScreenLocked,
 	}
 	if err := newCfg.Validate(); err != nil {
 		return err
@@ -284,6 +335,24 @@ func (s *Service) SetForwarding(ctx context.Context, enabled bool) error {
 		ExcludedApps:         s.cfg.ExcludedApps,
 		HistoryRetentionDays: s.cfg.HistoryRetentionDays,
 		MaxAttempts:          s.cfg.MaxAttempts,
+		OnlyWhenScreenLocked: s.cfg.OnlyWhenScreenLocked,
+	}
+	s.mu.Unlock()
+	return s.ApplyConfig(ctx, upd)
+}
+
+// SetOnlyWhenLocked toggles the screen lock restriction (persisted). When it
+// is on, notifications that arrive while the screen is unlocked are ignored.
+func (s *Service) SetOnlyWhenLocked(ctx context.Context, only bool) error {
+	s.mu.Lock()
+	upd := ConfigUpdate{
+		ChatID:               s.cfg.ChatID,
+		PollIntervalSeconds:  s.cfg.PollIntervalSeconds,
+		ForwardingEnabled:    s.cfg.ForwardingEnabled,
+		ExcludedApps:         s.cfg.ExcludedApps,
+		HistoryRetentionDays: s.cfg.HistoryRetentionDays,
+		MaxAttempts:          s.cfg.MaxAttempts,
+		OnlyWhenScreenLocked: only,
 	}
 	s.mu.Unlock()
 	return s.ApplyConfig(ctx, upd)
@@ -365,19 +434,21 @@ func (s *Service) Status() Status {
 
 	counts, _ := s.q.Counts(context.Background())
 	st := Status{
-		Version:           Version,
-		Configured:        token != "" && cfg.ChatID != "",
-		ForwardingEnabled: cfg.ForwardingEnabled,
-		Paused:            s.paused.Load(),
-		SecretStore:       s.secrets.Name(),
-		ChatIDMasked:      maskChatID(cfg.ChatID),
-		PollIntervalSecs:  cfg.PollIntervalSeconds,
-		ExcludedApps:      len(cfg.ExcludedApps),
-		Counts:            counts,
-		SourceAccessible:  s.srcAccessible.Load(),
-		SourceError:       s.srcError.Load().(string),
-		RecordsSeen:       s.recordsSeen.Load(),
-		RecordsQueued:     s.recordsQueued.Load(),
+		Version:              Version,
+		Configured:           token != "" && cfg.ChatID != "",
+		ForwardingEnabled:    cfg.ForwardingEnabled,
+		Paused:               s.paused.Load(),
+		SecretStore:          s.secrets.Name(),
+		ChatIDMasked:         maskChatID(cfg.ChatID),
+		PollIntervalSecs:     cfg.PollIntervalSeconds,
+		ExcludedApps:         len(cfg.ExcludedApps),
+		Counts:               counts,
+		SourceAccessible:     s.srcAccessible.Load(),
+		SourceError:          s.srcError.Load().(string),
+		RecordsSeen:          s.recordsSeen.Load(),
+		RecordsQueued:        s.recordsQueued.Load(),
+		ScreenLocked:         s.screenLocked.Load(),
+		OnlyWhenScreenLocked: cfg.OnlyWhenScreenLocked,
 	}
 	if v := s.lastPollAt.Load(); v > 0 {
 		st.LastPollAt = time.Unix(0, v)
@@ -471,13 +542,29 @@ func (s *Service) pollOnce(ctx context.Context) error {
 	s.lastPollErr.Store("")
 	s.lastPollAt.Store(time.Now().UnixNano())
 
+	// Read the lock state on every poll so the UI can show it.
+	locked := s.lock.Locked()
+	s.screenLocked.Store(locked)
+
 	if len(records) == 0 {
 		return nil
 	}
 
 	s.mu.Lock()
 	filter := s.filter
+	onlyWhenLocked := s.cfg.OnlyWhenScreenLocked
 	s.mu.Unlock()
+
+	if onlyWhenLocked && !locked {
+		// The screen is unlocked: the user is at the Mac, so notifications
+		// that arrive now are ignored. The watermark still advances, so they
+		// are not replayed once the screen locks again.
+		s.logger.Debug("ignoring notifications while the screen is unlocked", "count", len(records))
+		if err := s.saveWatermark(pollCtx, newWM); err != nil {
+			s.logger.Warn("could not save polling watermark", "error", err)
+		}
+		return nil
+	}
 
 	var skipped int
 	for _, rec := range records {

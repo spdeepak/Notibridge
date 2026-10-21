@@ -36,12 +36,14 @@ Each package has exactly one responsibility. Keep it that way.
 | `internal/dedup` | Computes durable keys: `u:<uuid>` when a record UUID exists, else `f:<sha256 fingerprint>`. Contains the documented fingerprint-collision limitation. |
 | `internal/storage` | The app's own SQLite DB (`state.db`): migrations (`schemaVersion` + `migrations` slice), `deliveries` + `meta` tables, purge/clear. Single pooled connection (see Concurrency). |
 | `internal/queue` | Durable delivery queue: atomic `Enqueue` (INSERT OR IGNORE = dedup), `ClaimDue`, `MarkSent`/`MarkRetry`/`MarkFailed`, jittered exponential `BackoffDelay`, `Counts`, `Recent`. |
+| `internal/screenlock` | Screen lock state (`State` interface + cgo `MacOS()` reading `CGSSessionScreenIsLocked`). Injectable via `app.Options.LockState`. |
 | `internal/telegram` | Bot API client (`getMe`, `sendMessage`), typed `APIError`/`TransportError` with `Retryable()`, token redaction, `Format()` (HTML-escaped message rendering). |
 | `internal/config` | `Config` load/save/validate, `SecretString` (unprintable), `SecretStore` interface with Keychain (`KeyringStore`) and 0600-file (`FileStore`) backends. |
 | `internal/app` | `Service`: wires everything; poller, delivery worker, retention loops, watermark persistence, status snapshots, pause/resume, lifecycle. No UI imports. |
 | `internal/menubar` | fyne/systray menu + runtime-generated icon. Renders `app.Status`, forwards actions. |
 | `internal/webui` | Loopback (127.0.0.1, random port, random session token) settings/activity page. |
 | `internal/logging` | slog handler that redacts registered secrets from messages *and* attributes. |
+| `internal/update` | Release check against GitHub Releases, SHA-256 + Ed25519 verification, download, staging and bundle swap. No UI imports. |
 | `cmd/notifyrelay` | Entry point: `run` (default), `diagnose`, `version`. Flags: `-debug`. Env: `NOTIBRIDGE_HOME`, `NOTIBRIDGE_LOG_LEVEL`. |
 
 Data flow: `MacOSSource.Poll` → `parser.Parse` → `filters` → `dedup.Key` →
@@ -59,8 +61,12 @@ Data flow: `MacOSSource.Poll` → `parser.Parse` → `filters` → `dedup.Key` �
   use injectable fakes from `app.Options` (`Source`, `Secrets`,
   `TelegramBaseURL`, `DBPath`).
 - `packaging/Info.plist` + `scripts/package_app.sh` produce
-  `dist/NotiBridge.app` (LSUIElement, ad-hoc signed). `Makefile` targets:
-  `build dev test vet fmt check diagnose release bundle clean`.
+  `dist/NotiBridge.app` (LSUIElement, ad-hoc signed) and the release archive
+  `dist/NotiBridge_<version>_<arch>.zip`. `scripts/make_icons` derives
+  `assets/icons/NotiBridge.icns` from the repository's `image.png` (never
+  modify that file); `scripts/sign_release` signs release checksums.
+  `Makefile` targets: `build dev test vet fmt check diagnose release bundle
+  package-amd64 package-universal icons version clean`.
 
 ## Go conventions
 
@@ -117,6 +123,11 @@ Data flow: `MacOSSource.Poll` → `parser.Parse` → `filters` → `dedup.Key` �
   5 min) so a fresh install does not replay history.
 - Parsing failures skip the record with a debug log (rec_id only, no
   payload). Excluded apps are counted, not logged individually.
+- The screen lock restriction (`Config.OnlyWhenScreenLocked`, **on by default**)
+  is applied at *poll* time: while the screen is unlocked the records of that
+  poll are dropped (not postponed) and the watermark still advances. The state
+  comes from `screenlock.MacOS()`; tests inject a fake through
+  `app.Options.LockState`.
 
 ## Telegram integration
 
@@ -145,7 +156,9 @@ Data flow: `MacOSSource.Poll` → `parser.Parse` → `filters` → `dedup.Key` �
   via UI, and **never logged**.
 - Forwarding transmits content to Telegram — this must remain documented in
   the README and any first-run guidance.
-- No telemetry, no analytics, no network calls beyond the Telegram API.
+- No telemetry, no analytics. Network traffic goes to the Telegram Bot API and
+  — **only when the user explicitly asks for it** — to the GitHub API for the
+  update check. There is no background polling of any kind.
 - Configuration and secrets files are 0600 in a 0700 directory; keep it that
   way.
 
@@ -181,7 +194,7 @@ gofmt -w .          # then confirm: gofmt -l . is empty
 go vet ./...
 go test ./...       # prefer go test -count=1 ./... when behavior changed
 make release        # darwin/arm64 build
-make bundle         # dist/NotiBridge.app + ad-hoc codesign verify
+make bundle         # dist/NotiBridge.app + ad-hoc codesign verify + release zip
 ./bin/notibridge diagnose   # live DB access check (needs Full Disk Access)
 ```
 

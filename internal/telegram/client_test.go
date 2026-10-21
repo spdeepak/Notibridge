@@ -225,7 +225,10 @@ func TestFormatEscapesHTML(t *testing.T) {
 func TestFormatIncludesOnlyPresentFields(t *testing.T) {
 	n := notifications.Notification{AppID: "com.example.app"}
 	msg := Format(n)
-	if !strings.Contains(msg, "App:</b> com.example.app") {
+	// The app line shows the last bundle-ID component ("app"), not the full
+	// reverse-DNS identifier. Format trims the trailing newline, so the app
+	// line ends the message here.
+	if !strings.Contains(msg, "<b>App:</b> app") {
 		t.Errorf("missing app line:\n%s", msg)
 	}
 	for _, absent := range []string{"Title:", "Subtitle:", "Message:", "Time:", "Category:"} {

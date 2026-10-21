@@ -1,0 +1,81 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# The CI workflow only reads the repository.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            printf 'These files are not gofmt-ed:\n%s\n' "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -count=1 ./...
+
+      - name: Check that go.mod is tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+  build:
+    name: Build (${{ matrix.arch }})
+    runs-on: macos-latest
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, amd64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build
+        env:
+          GOARCH: ${{ matrix.arch }}
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=1 go build -trimpath -o "dist/NotiBridge-${{ matrix.arch }}" ./cmd/notifyrelay
+          file "dist/NotiBridge-${{ matrix.arch }}"
+
+      # The packaging script builds for the architecture it is given; the
+      # ambient GOARCH is cleared so that the helper programs it runs are
+      # always built for the runner itself.
+      - name: Package
+        env:
+          GOARCH: ""
+        run: |
+          ./scripts/package_app.sh "$(make -s version)" "${{ matrix.arch }}"
+          unzip -l "dist/NotiBridge_$(make -s version)_${{ matrix.arch }}.zip" \
+            | grep -q "NotiBridge.app/Contents/MacOS/NotiBridge"
+          unzip -l "dist/NotiBridge_$(make -s version)_${{ matrix.arch }}.zip" \
+            | grep -q "NotiBridge.app/Contents/Resources/NotiBridge.icns"

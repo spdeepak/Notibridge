@@ -14,6 +14,7 @@ import (
 	"github.com/spdeepak/notibridge/internal/logging"
 	"github.com/spdeepak/notibridge/internal/menubar"
 	"github.com/spdeepak/notibridge/internal/notifications/source"
+	"github.com/spdeepak/notibridge/internal/update"
 	"github.com/spdeepak/notibridge/internal/webui"
 )
 
@@ -27,6 +28,8 @@ func main() {
 			return
 		case "run":
 			os.Args = append(os.Args[:1], os.Args[2:]...)
+		case update.ApplyUpdateCommand:
+			os.Exit(runApplyUpdate(os.Args[2:]))
 		case "-h", "--help", "help":
 			usage()
 			return
@@ -110,6 +113,22 @@ func runApp() {
 		}
 		_ = web.Close()
 	})
+}
+
+// runApplyUpdate performs the bundle swap that the update helper carries
+// out. It is an internal command, not part of the user interface.
+func runApplyUpdate(args []string) int {
+	fs := flag.NewFlagSet(update.ApplyUpdateCommand, flag.ExitOnError)
+	staged := fs.String("staged", "", "path of the staged application bundle")
+	pid := fs.Int("pid", 0, "process id to wait for before replacing the bundle")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if err := update.Apply(update.ApplyOptions{StagedApp: *staged, ParentPID: *pid}); err != nil {
+		fmt.Fprintln(os.Stderr, "notibridge: could not install the update:", err)
+		return 1
+	}
+	return 0
 }
 
 func runDiagnose() int {

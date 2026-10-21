@@ -54,12 +54,14 @@ func Run(svc *app.Service, web *webui.Server, logger *slog.Logger, onExit func()
 
 		pauseItem := systray.AddMenuItemCheckbox("Pause forwarding", "Stop sending notifications to Telegram (queued items are kept)", false)
 		forwardItem := systray.AddMenuItemCheckbox("Forwarding enabled", "Master switch, persisted in settings", false)
+		lockItem := systray.AddMenuItemCheckbox("Only forward while the screen is locked", "Ignore notifications that arrive while the screen is unlocked", false)
 		testItem := systray.AddMenuItem("Send test message", "Send a test message to the configured Telegram chat")
 
 		systray.AddSeparator()
 
 		settingsItem := systray.AddMenuItem("Settings…", "Open the settings page in your browser")
 		activityItem := systray.AddMenuItem("Recent activity…", "Open the delivery activity view in your browser")
+		updateItem := systray.AddMenuItem("Check for updates…", "Look for a newer NotiBridge release on GitHub")
 		diagItem := systray.AddMenuItem("Run database diagnostics", "Check Notification Center database access")
 		clearItem := systray.AddMenuItem("Clear local history", "Delete locally stored notification content and delivery history")
 
@@ -83,6 +85,13 @@ func Run(svc *app.Service, web *webui.Server, logger *slog.Logger, onExit func()
 						logger.Warn("could not change forwarding setting", "error", err)
 					}
 					cancel()
+				case <-lockItem.ClickedCh:
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					st := svc.Status()
+					if err := svc.SetOnlyWhenLocked(ctx, !st.OnlyWhenScreenLocked); err != nil {
+						logger.Warn("could not change the screen lock setting", "error", err)
+					}
+					cancel()
 				case <-testItem.ClickedCh:
 					ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 					if err := svc.SendTestMessage(ctx); err != nil {
@@ -95,6 +104,17 @@ func Run(svc *app.Service, web *webui.Server, logger *slog.Logger, onExit func()
 					openBrowser(web.URL(), logger)
 				case <-activityItem.ClickedCh:
 					openBrowser(web.ActivityURL(), logger)
+				case <-updateItem.ClickedCh:
+					// The check runs in the background so the page opens
+					// immediately; it shows the result once it is done.
+					go func() {
+						ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+						defer cancel()
+						if _, err := svc.CheckForUpdates(ctx); err != nil {
+							logger.Warn("update check failed", "error", err)
+						}
+					}()
+					openBrowser(web.UpdatesURL(), logger)
 				case <-diagItem.ClickedCh:
 					openBrowser(web.URL()+"&diag=1", logger)
 				case <-clearItem.ClickedCh:
@@ -104,6 +124,11 @@ func Run(svc *app.Service, web *webui.Server, logger *slog.Logger, onExit func()
 					}
 					cancel()
 				case <-quitItem.ClickedCh:
+					systray.Quit()
+					return
+				case <-svc.QuitRequested():
+					// An update was installed: the update helper replaces the
+					// application bundle once this process exits.
 					systray.Quit()
 					return
 				}
@@ -130,6 +155,7 @@ func Run(svc *app.Service, web *webui.Server, logger *slog.Logger, onExit func()
 					pauseItem.SetTitle("Pause forwarding")
 				}
 				setChecked(forwardItem, st.ForwardingEnabled)
+				setChecked(lockItem, st.OnlyWhenScreenLocked)
 			}
 		}()
 	}, cleanup)
@@ -173,6 +199,9 @@ func statusTitle(st app.Status) string {
 	case !st.SourceAccessible:
 		return "Status: notification database inaccessible"
 	default:
+		if st.OnlyWhenScreenLocked && !st.ScreenLocked {
+			return "Status: screen unlocked — notifications are ignored"
+		}
 		return "Status: monitoring & forwarding"
 	}
 }

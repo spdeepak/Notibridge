@@ -2,6 +2,9 @@
 bin/
 dist/
 
+# icon intermediates: regenerate with `make icons` (the .icns is committed)
+assets/icons/NotiBridge.iconset/
+
 # vendored deps (recreate with: go mod vendor)
 vendor/
 

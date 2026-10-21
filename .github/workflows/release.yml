@@ -1,0 +1,129 @@
+name: Release
+
+# A release is published from a version tag: vMAJOR.MINOR.PATCH.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+# The release workflow creates the GitHub Release and uploads assets.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Read the version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Check the tag against the version in the source
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          source_version=$(make -s version)
+          if [ "$source_version" != "$VERSION" ]; then
+            echo "::error::The tag says $VERSION but internal/app/service.go says $source_version. Update the version before tagging."
+            exit 1
+          fi
+
+      # The Ed25519 signing key lives in the repository secret
+      # UPDATE_SIGNING_KEY (base64 of the 32-byte seed). Without it the
+      # release is published with checksums only.
+      - name: Read the signing key
+        id: key
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No UPDATE_SIGNING_KEY secret found: publishing checksums only, without a signature."
+            exit 0
+          fi
+          printf '%s' "$UPDATE_SIGNING_KEY" > "$RUNNER_TEMP/update_key.b64"
+          chmod 600 "$RUNNER_TEMP/update_key.b64"
+          echo "available=true" >> "$GITHUB_OUTPUT"
+          echo "public_key=$(go run ./scripts/sign_release pubkey "$RUNNER_TEMP/update_key.b64")" >> "$GITHUB_OUTPUT"
+
+      - name: Build the release packages
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          NOTIBRIDGE_UPDATE_PUBLIC_KEY: ${{ steps.key.outputs.public_key }}
+        run: |
+          ./scripts/package_app.sh "$VERSION" arm64
+          ./scripts/package_app.sh "$VERSION" amd64
+
+      - name: Write the checksums
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd dist
+          shasum -a 256 "NotiBridge_${VERSION}_arm64.zip" "NotiBridge_${VERSION}_amd64.zip" > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Sign the checksums
+        if: steps.key.outputs.available == 'true'
+        run: go run ./scripts/sign_release sign "$RUNNER_TEMP/update_key.b64" dist/SHA256SUMS
+
+      - name: Verify the artifacts
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          cd dist
+          shasum -a 256 -c SHA256SUMS
+          for arch in arm64 amd64; do
+            unzip -l "NotiBridge_${VERSION}_${arch}.zip" | grep -q "NotiBridge.app/Contents/MacOS/NotiBridge"
+            unzip -l "NotiBridge_${VERSION}_${arch}.zip" | grep -q "NotiBridge.app/Contents/Resources/NotiBridge.icns"
+          done
+          # The version inside the bundle must match the tag.
+          short=$(unzip -p "NotiBridge_${VERSION}_arm64.zip" "NotiBridge.app/Contents/Info.plist" \
+            | plutil -extract CFBundleShortVersionString raw -)
+          if [ "$short" != "$VERSION" ]; then
+            echo "::error::The bundle reports version $short, expected $VERSION."
+            exit 1
+          fi
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          cat > "$RUNNER_TEMP/notes.md" <<EOF
+          ## Installation
+
+          Download \`NotiBridge_${VERSION}_arm64.zip\` (Apple Silicon) or
+          \`NotiBridge_${VERSION}_amd64.zip\` (Intel), unzip it and move
+          \`NotiBridge.app\` into your Applications folder.
+
+          These builds are **not signed with an Apple Developer ID and are not
+          notarized**, so macOS shows an "unverified developer" warning the
+          first time you open them. See \`docs/INSTALL.md\` for how to open them
+          without weakening Gatekeeper.
+
+          ## Verify the download
+
+          \`\`\`
+          shasum -a 256 NotiBridge_${VERSION}_arm64.zip
+          \`\`\`
+
+          Compare the output with the \`SHA256SUMS\` file in this release.
+          EOF
+
+          assets=(dist/NotiBridge_${VERSION}_arm64.zip dist/NotiBridge_${VERSION}_amd64.zip dist/SHA256SUMS)
+          if [ -f dist/SHA256SUMS.sig ]; then
+            assets+=(dist/SHA256SUMS.sig)
+          fi
+          gh release create "$TAG" \
+            --title "NotiBridge $VERSION" \
+            --notes-file "$RUNNER_TEMP/notes.md" \
+            --verify-tag \
+            "${assets[@]}"

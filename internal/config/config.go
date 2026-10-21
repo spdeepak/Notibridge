@@ -43,6 +43,10 @@ type Config struct {
 	// HistoryRetentionDays bounds how long delivery records (including
 	// notification text) are kept locally.
 	HistoryRetentionDays int `json:"history_retention_days"`
+	// OnlyWhenScreenLocked restricts forwarding to notifications that arrive
+	// while the screen is locked. Notifications that arrive while the screen
+	// is unlocked are ignored, not postponed.
+	OnlyWhenScreenLocked bool `json:"only_when_screen_locked"`
 	// MaxAttempts is the delivery retry budget.
 	MaxAttempts int `json:"max_attempts"`
 }
@@ -57,6 +61,7 @@ func Default() Config {
 		ExcludedApps:         []string{},
 		HistoryRetentionDays: 14,
 		MaxAttempts:          8,
+		OnlyWhenScreenLocked: true,
 	}
 }
 

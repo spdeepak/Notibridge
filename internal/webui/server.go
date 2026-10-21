@@ -71,6 +71,9 @@ func (s *Server) URL() string {
 // ActivityURL returns the URL anchored on the activity section.
 func (s *Server) ActivityURL() string { return s.URL() + "#activity" }
 
+// UpdatesURL returns the URL anchored on the updates section.
+func (s *Server) UpdatesURL() string { return s.URL() + "#updates" }
+
 func (s *Server) authorized(r *http.Request) bool {
 	t := r.URL.Query().Get("t")
 	if t == "" {
@@ -88,6 +91,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /toggle-pause", s.handleTogglePause)
 	s.mux.HandleFunc("POST /toggle-forwarding", s.handleToggleForwarding)
 	s.mux.HandleFunc("POST /clear", s.handleClear)
+	s.mux.HandleFunc("POST /update/check", s.handleUpdateCheck)
+	s.mux.HandleFunc("POST /update/download", s.handleUpdateDownload)
+	s.mux.HandleFunc("POST /update/install", s.handleUpdateInstall)
 }
 
 func (s *Server) redirect(w http.ResponseWriter, r *http.Request, msg string, isErr bool) {
@@ -126,6 +132,7 @@ type pageData struct {
 	Recent  []activityRow
 	Form    settingsForm
 	Diag    *appDiag
+	Update  app.UpdateState
 }
 
 type appDiag struct {
@@ -149,13 +156,14 @@ type activityRow struct {
 }
 
 type settingsForm struct {
-	ChatID        string
-	PollSeconds   string
-	RetentionDays string
-	MaxAttempts   string
-	Exclusions    string
-	Forwarding    bool
-	HasToken      bool
+	ChatID         string
+	PollSeconds    string
+	RetentionDays  string
+	MaxAttempts    string
+	Exclusions     string
+	Forwarding     bool
+	OnlyWhenLocked bool
+	HasToken       bool
 }
 
 func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
@@ -173,13 +181,15 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 		Message: r.URL.Query().Get("msg"),
 		Err:     r.URL.Query().Get("kind") == "err",
 		Status:  st,
+		Update:  s.svc.UpdateStatus(),
 		Form: settingsForm{
-			ChatID:        "",
-			PollSeconds:   strconv.Itoa(st.PollIntervalSecs),
-			RetentionDays: "14",
-			MaxAttempts:   "8",
-			Forwarding:    st.ForwardingEnabled,
-			HasToken:      strings.Contains(r.URL.RawQuery, "t="), // token never round-trips into the form
+			ChatID:         "",
+			PollSeconds:    strconv.Itoa(st.PollIntervalSecs),
+			RetentionDays:  "14",
+			MaxAttempts:    "8",
+			Forwarding:     st.ForwardingEnabled,
+			OnlyWhenLocked: true,
+			HasToken:       strings.Contains(r.URL.RawQuery, "t="), // token never round-trips into the form
 		},
 	}
 	if cfg, err := config.Load(); err == nil {
@@ -188,6 +198,7 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 		data.Form.MaxAttempts = strconv.Itoa(cfg.MaxAttempts)
 		data.Form.Exclusions = strings.Join(cfg.ExcludedApps, "\n")
 		data.Form.Forwarding = cfg.ForwardingEnabled
+		data.Form.OnlyWhenLocked = cfg.OnlyWhenScreenLocked
 	}
 	if rows, err := s.svc.RecentDeliveries(r.Context(), 25); err == nil {
 		for _, d := range rows {
@@ -247,6 +258,7 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 		ExcludedApps:         splitLines(r.FormValue("exclusions")),
 		HistoryRetentionDays: atoiDefault(r.FormValue("retention_days"), 14),
 		MaxAttempts:          atoiDefault(r.FormValue("max_attempts"), 8),
+		OnlyWhenScreenLocked: r.FormValue("only_when_locked") == "on",
 	}
 	if tok := strings.TrimSpace(r.FormValue("bot_token")); tok != "" {
 		if strings.Contains(tok, "…") || tok == "(unchanged)" {
@@ -336,6 +348,61 @@ func (s *Server) handleClear(w http.ResponseWriter, r *http.Request) {
 	s.redirect(w, r, fmt.Sprintf("Cleared %d local delivery records.", n), false)
 }
 
+// handleUpdateCheck asks GitHub Releases whether a newer version exists.
+func (s *Server) handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	st, err := s.svc.CheckForUpdates(ctx)
+	if err != nil {
+		s.redirect(w, r, "Update check failed: "+err.Error(), true)
+		return
+	}
+	if st.Available() {
+		s.redirect(w, r, "Version "+st.LatestVersion+" is available.", false)
+		return
+	}
+	s.redirect(w, r, "NotiBridge is up to date.", false)
+}
+
+// handleUpdateDownload downloads and verifies the newest release. The update
+// is staged, not installed.
+func (s *Server) handleUpdateDownload(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
+	defer cancel()
+	st, err := s.svc.DownloadUpdate(ctx)
+	if err != nil {
+		s.redirect(w, r, "Update download failed: "+err.Error(), true)
+		return
+	}
+	s.redirect(w, r, "Version "+st.StagedVersion+" was downloaded and verified. It is not installed yet.", false)
+}
+
+// handleUpdateInstall replaces the running application with the staged
+// update. NotiBridge quits and is relaunched by the update helper.
+func (s *Server) handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
+	if !s.authorized(r) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	st, err := s.svc.InstallUpdate(ctx)
+	if err != nil {
+		s.redirect(w, r, "Update could not be installed: "+err.Error(), true)
+		return
+	}
+	s.redirect(w, r, "Version "+st.StagedVersion+" was installed. NotiBridge will restart.", false)
+	s.svc.RequestQuit()
+}
+
 func atoiDefault(s string, def int) int {
 	if n, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && n > 0 {
 		return n
@@ -393,6 +460,7 @@ const pageHTML = `<!DOCTYPE html>
   {{if .Status.Configured}}<span class="badge ok">Configured</span>{{else}}<span class="badge bad">Not configured</span>{{end}}
   {{if .Status.Paused}}<span class="badge warn">Paused</span>{{else}}<span class="badge ok">Not paused</span>{{end}}
   {{if .Status.ForwardingEnabled}}<span class="badge ok">Forwarding on</span>{{else}}<span class="badge warn">Forwarding off</span>{{end}}
+  {{if .Status.OnlyWhenScreenLocked}}{{if .Status.ScreenLocked}}<span class="badge ok">Screen locked</span>{{else}}<span class="badge warn">Screen unlocked — notifications are ignored</span>{{end}}{{end}}
   {{if .Status.SourceAccessible}}<span class="badge ok">Notification DB readable</span>{{else}}<span class="badge bad">Notification DB inaccessible</span>{{end}}
 </p>
 <p class="muted">
@@ -421,6 +489,7 @@ const pageHTML = `<!DOCTYPE html>
   <label for="exclusions">Excluded apps (bundle IDs, one per line; <code>com.example.*</code> wildcards allowed)</label>
   <textarea id="exclusions" name="exclusions" placeholder="com.apple.Safari">{{.Form.Exclusions}}</textarea>
   <label><input type="checkbox" name="forwarding" {{if .Form.Forwarding}}checked{{end}}> Forward notifications to Telegram</label>
+  <label><input type="checkbox" name="only_when_locked" {{if .Form.OnlyWhenLocked}}checked{{end}}> Only forward notifications while the screen is locked (notifications that arrive while the screen is unlocked are ignored)</label>
   <button type="submit">Save settings</button>
 </form>
 
@@ -452,6 +521,30 @@ const pageHTML = `<!DOCTYPE html>
 <form method="post" action="/clear"><input type="hidden" name="t" value="{{.Token}}">
   <button type="submit" onclick="return confirm('Delete all locally stored notification content and delivery history?')">Clear local history</button>
 </form>
+
+<h2 id="updates">Updates</h2>
+<p class="muted">
+  Installed version: <b>{{.Update.CurrentVersion}}</b>
+  {{if .Update.Available}}· newest release: <b>{{.Update.LatestVersion}}</b>{{end}}
+  {{if not .Update.CheckedAt.IsZero}}· last checked: {{.Update.CheckedAt.Format "2006-01-02 15:04:05"}}{{end}}
+  {{if .Update.Checking}}· checking for updates…{{end}}
+  {{if and (not .Update.CheckedAt.IsZero) (not .Update.Available) (not .Update.Error)}}· you are running the latest version{{end}}
+</p>
+<form method="post" action="/update/check"><input type="hidden" name="t" value="{{.Token}}">
+  <button type="submit">Check for updates</button>
+</form>
+{{if .Update.Staged}}
+<p class="msg ok">Version {{.Update.StagedVersion}} was downloaded and verified, but it is <b>not installed yet</b>.</p>
+<form method="post" action="/update/install"><input type="hidden" name="t" value="{{.Token}}">
+  <button type="submit">Install update and restart NotiBridge</button>
+</form>
+{{else if .Update.Available}}
+<form method="post" action="/update/download"><input type="hidden" name="t" value="{{.Token}}">
+  <button type="submit">Download and verify {{.Update.LatestVersion}}</button>
+</form>
+{{end}}
+{{if .Update.Error}}<p class="msg err">{{.Update.Error}}</p>{{end}}
+{{if .Update.Notes}}<pre class="muted">{{.Update.Notes}}</pre>{{end}}
 
 <h2>Notification database access</h2>
 <p class="muted">NotiBridge reads Apple's undocumented Notification Center database read-only. Access may require Full Disk Access and is not guaranteed on every macOS version.</p>
