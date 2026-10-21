@@ -1,0 +1,31 @@
+# build outputs
+bin/
+dist/
+
+# vendored deps (recreate with: go mod vendor)
+vendor/
+
+# local secrets / state never belong in git
+secrets.json
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+
+# test / coverage artifacts
+*.test
+coverage.out
+*.log
+
+# editor + IDE noise
+.idea/
+.vscode/
+*.iml
+*.swp
+*~
+
+# editor noise
+.DS_Store
+.AppleDouble
+._*
