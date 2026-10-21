@@ -55,11 +55,10 @@ jobs:
 
       - name: Build the release packages
         env:
-          VERSION: ${{ steps.version.outputs.version }}
           NOTIBRIDGE_UPDATE_PUBLIC_KEY: ${{ steps.key.outputs.public_key }}
         run: |
-          ./scripts/package_app.sh "$VERSION" arm64
-          ./scripts/package_app.sh "$VERSION" amd64
+          make bundle
+          make package-amd64
 
       - name: Write the checksums
         env:
