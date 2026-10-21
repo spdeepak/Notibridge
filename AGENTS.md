@@ -42,6 +42,7 @@ Each package has exactly one responsibility. Keep it that way.
 | `internal/menubar` | fyne/systray menu + runtime-generated icon. Renders `app.Status`, forwards actions. |
 | `internal/webui` | Loopback (127.0.0.1, random port, random session token) settings/activity page. |
 | `internal/logging` | slog handler that redacts registered secrets from messages *and* attributes. |
+| `internal/update` | Release check against GitHub Releases, SHA-256 + Ed25519 verification, download, staging and bundle swap. No UI imports. |
 | `cmd/notifyrelay` | Entry point: `run` (default), `diagnose`, `version`. Flags: `-debug`. Env: `NOTIBRIDGE_HOME`, `NOTIBRIDGE_LOG_LEVEL`. |
 
 Data flow: `MacOSSource.Poll` → `parser.Parse` → `filters` → `dedup.Key` →
@@ -59,8 +60,12 @@ Data flow: `MacOSSource.Poll` → `parser.Parse` → `filters` → `dedup.Key` �
   use injectable fakes from `app.Options` (`Source`, `Secrets`,
   `TelegramBaseURL`, `DBPath`).
 - `packaging/Info.plist` + `scripts/package_app.sh` produce
-  `dist/NotiBridge.app` (LSUIElement, ad-hoc signed). `Makefile` targets:
-  `build dev test vet fmt check diagnose release bundle clean`.
+  `dist/NotiBridge.app` (LSUIElement, ad-hoc signed) and the release archive
+  `dist/NotiBridge_<version>_<arch>.zip`. `scripts/make_icons` derives
+  `assets/icons/NotiBridge.icns` from the repository's `image.png` (never
+  modify that file); `scripts/sign_release` signs release checksums.
+  `Makefile` targets: `build dev test vet fmt check diagnose release bundle
+  package-amd64 package-universal icons version clean`.
 
 ## Go conventions
 
@@ -145,7 +150,9 @@ Data flow: `MacOSSource.Poll` → `parser.Parse` → `filters` → `dedup.Key` �
   via UI, and **never logged**.
 - Forwarding transmits content to Telegram — this must remain documented in
   the README and any first-run guidance.
-- No telemetry, no analytics, no network calls beyond the Telegram API.
+- No telemetry, no analytics. Network traffic goes to the Telegram Bot API and
+  — **only when the user explicitly asks for it** — to the GitHub API for the
+  update check. There is no background polling of any kind.
 - Configuration and secrets files are 0600 in a 0700 directory; keep it that
   way.
 
@@ -181,7 +188,7 @@ gofmt -w .          # then confirm: gofmt -l . is empty
 go vet ./...
 go test ./...       # prefer go test -count=1 ./... when behavior changed
 make release        # darwin/arm64 build
-make bundle         # dist/NotiBridge.app + ad-hoc codesign verify
+make bundle         # dist/NotiBridge.app + ad-hoc codesign verify + release zip
 ./bin/notibridge diagnose   # live DB access check (needs Full Disk Access)
 ```
 

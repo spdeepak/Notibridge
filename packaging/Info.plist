@@ -8,6 +8,8 @@
 	<string>NotiBridge</string>
 	<key>CFBundleExecutable</key>
 	<string>NotiBridge</string>
+	<key>CFBundleIconFile</key>
+	<string>NotiBridge</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.notibridge.NotiBridge</string>
 	<key>CFBundleInfoDictionaryVersion</key>

@@ -69,15 +69,51 @@ message. This is at-least-once delivery, not exactly-once.
   **Clear local history**
 - 🔑 Bot token in the **macOS Keychain** (with a warned 0600-file fallback
   for headless environments)
+- ⬆️ In-app update check against the GitHub releases page: download, verify
+  (SHA-256 + Ed25519 signature), install — only ever when you ask for it
 - 🛟 Structured logs with automatic secret redaction; notification bodies are
   never logged
 
 ## Requirements
 
-- Apple Silicon Mac, macOS 12 or later (developed and tested on macOS 27 /
-  Tahoe; the db2 layout is used on macOS 10.13–26)
+- Apple Silicon or Intel Mac, macOS 12 or later (developed and tested on
+  macOS 27 / Tahoe; the db2 layout is used on macOS 10.13–26)
 - Go 1.22+ to build from source
 - A Telegram bot token ([@BotFather](https://t.me/BotFather)) and a chat ID
+
+## Install
+
+Download the archive for your Mac from the
+[releases page](https://github.com/spdeepak/Notibridge/releases), verify it
+against the published `SHA256SUMS`, and move `NotiBridge.app` into
+`/Applications`.
+
+```bash
+shasum -a 256 NotiBridge_0.1.0_arm64.zip   # compare with SHA256SUMS
+unzip NotiBridge_0.1.0_arm64.zip
+mv NotiBridge.app /Applications/
+```
+
+> The released app is **not signed with an Apple Developer ID and is not
+> notarized**, so macOS shows an "unidentified developer" warning on the first
+> launch. [docs/INSTALL.md](docs/INSTALL.md) explains how to open it with
+> Apple's per-app approval flow — without weakening Gatekeeper.
+
+Full instructions, including the Full Disk Access grant and the Telegram
+setup, are in [docs/INSTALL.md](docs/INSTALL.md).
+
+## Updating
+
+NotiBridge can check the releases page for a newer version, download it,
+verify it and install it — **only when you ask for it** (menu bar → *Check for
+updates…*). There is no background polling.
+
+The download is verified against the release's SHA-256 checksum, and, when the
+build embeds the project's public key, the checksum file must also carry a
+valid Ed25519 signature. A downloaded update is staged first and installed in a
+separate step; your settings and bot token are never touched.
+
+See [docs/UPDATING.md](docs/UPDATING.md).
 
 ## Build and run
 
@@ -95,9 +131,13 @@ make check
 # release binary for Apple Silicon
 make release          # → dist/NotiBridge
 
-# assemble dist/NotiBridge.app (ad-hoc signed, LSUIElement)
-make bundle
+# assemble dist/NotiBridge.app (ad-hoc signed, LSUIElement) and its archive
+make bundle           # → dist/NotiBridge_0.1.0_arm64.zip
 open dist/NotiBridge.app
+
+# other architectures
+make package-amd64
+make package-universal
 ```
 
 Quit from the **menu bar icon → Quit NotiBridge** (shuts down workers and
@@ -187,8 +227,10 @@ virtually all real notifications.
   `~/Library/Application Support/NotiBridge/`) and the UI shows a warning.
 - The config file (`config.json`, mode 0600) never contains the token.
 - Logs redact the token automatically and never include notification bodies.
-- Telegram traffic goes to `https://api.telegram.org` only. No other network
-  calls, no telemetry, no analytics.
+- Telegram traffic goes to `https://api.telegram.org` only. The only other
+  request NotiBridge ever makes is to the GitHub API — and only when you
+  explicitly ask it to check for updates. No background traffic, no telemetry,
+  no analytics.
 - Apple's database is opened read-only (`mode=ro`) and never written,
   vacuumed, or checkpointed by NotiBridge.
 - All local data lives in `~/Library/Application Support/NotiBridge/`
@@ -214,9 +256,17 @@ internal/
   queue/                            durable delivery queue + backoff
   storage/                          app-owned SQLite + migrations
   telegram/                         Bot API client + HTML-safe formatting
+  update/                           release check, verification, install
   webui/                            loopback settings/activity page
+assets/icons/NotiBridge.icns         generated app icon (see `make icons`)
+image.png                            icon source of truth
 packaging/Info.plist                 app bundle metadata (LSUIElement)
-scripts/package_app.sh               release .app assembly
+scripts/make_icons/                  icon generator
+scripts/package_app.sh               release .app assembly + zip
+scripts/sign_release/                Ed25519 signing of release checksums
+docs/INSTALL.md                      installing, Gatekeeper, first launch
+docs/UPDATING.md                     how the updater works
+docs/RELEASING.md                    how a release is cut
 docs/TROUBLESHOOTING.md              when things go wrong
 ```
 
@@ -239,11 +289,15 @@ Keychain, or network.**
 
 Platform-specific checks that ran on this machine (Apple Silicon, macOS 27):
 `go build ./...`, `go vet ./...`, full `go test ./...`, `make bundle`
-(including `codesign --verify`), `notibridge diagnose`, and a SIGTERM
-smoke-run of the app. **Live reads of the real Notification Center database
-could not be verified on the development machine** — TCC denied access until
-Full Disk Access is granted manually (exactly the situation `diagnose`
-reports). See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+(including `codesign --verify`), an arm64 **and** amd64 package build with
+checksum verification, `notibridge diagnose`, and a SIGTERM smoke-run of the
+app. **Live reads of the real Notification Center database could not be
+verified on the development machine** — TCC denied access until Full Disk
+Access is granted manually (exactly the situation `diagnose` reports). See
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+
+The GitHub Actions workflows (`.github/workflows/ci.yml` and
+`release.yml`) run the same checks on every push and publish the releases.
 
 ## Known limitations
 
@@ -251,9 +305,12 @@ reports). See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 - At-least-once Telegram delivery; rare duplicates on ambiguous timeouts.
 - Fingerprint dedup can collapse two byte-identical notifications in the same
   second (records *without* UUIDs only).
-- The app bundle is **ad-hoc signed only** — not notarized. Gatekeeper will
-  warn about the first launch of a downloaded copy; locally built copies run
-  fine. Homebrew distribution may come later.
+- The app bundle is **ad-hoc signed only** — not signed with an Apple
+  Developer ID and not notarized. Gatekeeper warns about the first launch of a
+  downloaded copy; locally built copies run fine. See
+  [docs/INSTALL.md](docs/INSTALL.md).
+- The update check is **manual** — NotiBridge never polls for updates in the
+  background.
 - Single-user, single-chat, no cloud sync (by design for the MVP).
 
 ## License

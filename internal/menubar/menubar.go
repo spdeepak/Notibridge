@@ -60,6 +60,7 @@ func Run(svc *app.Service, web *webui.Server, logger *slog.Logger, onExit func()
 
 		settingsItem := systray.AddMenuItem("Settings…", "Open the settings page in your browser")
 		activityItem := systray.AddMenuItem("Recent activity…", "Open the delivery activity view in your browser")
+		updateItem := systray.AddMenuItem("Check for updates…", "Look for a newer NotiBridge release on GitHub")
 		diagItem := systray.AddMenuItem("Run database diagnostics", "Check Notification Center database access")
 		clearItem := systray.AddMenuItem("Clear local history", "Delete locally stored notification content and delivery history")
 
@@ -95,6 +96,17 @@ func Run(svc *app.Service, web *webui.Server, logger *slog.Logger, onExit func()
 					openBrowser(web.URL(), logger)
 				case <-activityItem.ClickedCh:
 					openBrowser(web.ActivityURL(), logger)
+				case <-updateItem.ClickedCh:
+					// The check runs in the background so the page opens
+					// immediately; it shows the result once it is done.
+					go func() {
+						ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+						defer cancel()
+						if _, err := svc.CheckForUpdates(ctx); err != nil {
+							logger.Warn("update check failed", "error", err)
+						}
+					}()
+					openBrowser(web.UpdatesURL(), logger)
 				case <-diagItem.ClickedCh:
 					openBrowser(web.URL()+"&diag=1", logger)
 				case <-clearItem.ClickedCh:
@@ -104,6 +116,11 @@ func Run(svc *app.Service, web *webui.Server, logger *slog.Logger, onExit func()
 					}
 					cancel()
 				case <-quitItem.ClickedCh:
+					systray.Quit()
+					return
+				case <-svc.QuitRequested():
+					// An update was installed: the update helper replaces the
+					// application bundle once this process exits.
 					systray.Quit()
 					return
 				}

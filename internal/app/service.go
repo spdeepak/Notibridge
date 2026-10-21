@@ -26,6 +26,7 @@ import (
 	"github.com/spdeepak/notibridge/internal/queue"
 	"github.com/spdeepak/notibridge/internal/storage"
 	"github.com/spdeepak/notibridge/internal/telegram"
+	"github.com/spdeepak/notibridge/internal/update"
 )
 
 // Version is the application version, overridable at link time.
@@ -45,6 +46,14 @@ type Options struct {
 	Secrets config.SecretStore
 	// TelegramBaseURL overrides the Bot API endpoint (tests).
 	TelegramBaseURL string
+	// UpdateOwner and UpdateRepo identify the GitHub repository whose
+	// releases are checked for updates.
+	UpdateOwner string
+	UpdateRepo  string
+	// UpdateAPIBaseURL overrides the GitHub API root (tests).
+	UpdateAPIBaseURL string
+	// UpdateHTTPClient overrides the HTTP client used by the updater (tests).
+	UpdateHTTPClient *http.Client
 }
 
 // Status is a snapshot of service state for the UI.
@@ -90,6 +99,15 @@ type Service struct {
 	wakeCh chan struct{}
 
 	paused atomic.Bool
+
+	// Release-based self-update.
+	upd      *update.Updater
+	updMu    sync.Mutex
+	updState UpdateState
+
+	// QuitRequested is closed when a frontend asks the application to stop.
+	quitCh   chan struct{}
+	quitOnce sync.Once
 
 	// Observability for the UI.
 	srcAccessible atomic.Bool
@@ -156,7 +174,9 @@ func New(opts Options) (*Service, error) {
 		filter:  filters.New(cfg.ExcludedApps),
 		token:   token,
 		wakeCh:  make(chan struct{}, 1),
+		quitCh:  make(chan struct{}),
 	}
+	s.upd = newUpdater(opts.Logger, opts)
 	if s.tgBase == "" {
 		s.tgBase = telegram.DefaultBaseURL
 	}
@@ -215,6 +235,16 @@ func (s *Service) Shutdown(ctx context.Context) error {
 	s.logger.Info("NotiBridge service stopped")
 	return err
 }
+
+// RequestQuit asks the frontends to shut the application down. It is used
+// after an update was installed: the update helper waits for this process to
+// exit before it replaces the application bundle.
+func (s *Service) RequestQuit() {
+	s.quitOnce.Do(func() { close(s.quitCh) })
+}
+
+// QuitRequested returns a channel that is closed when a quit was requested.
+func (s *Service) QuitRequested() <-chan struct{} { return s.quitCh }
 
 // ---- configuration ----
 

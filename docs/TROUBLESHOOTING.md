@@ -99,14 +99,46 @@ Check the menu bar status line:
 
 ## Startup / Gatekeeper notes
 
-`make bundle` produces an **ad-hoc signed** app (no Developer ID,
-no notarization):
+Released builds are **not signed with an Apple Developer ID and are not
+notarized** — they carry an ad-hoc signature only. `make bundle` produces the
+same kind of bundle locally.
 
 - Running `open dist/NotiBridge.app` on the build machine works.
-- Copying it to another Mac may trigger Gatekeeper ("unidentified
-  developer"). Bypass locally via right-click → Open, or
-  `xattr -dr com.apple.quarantine dist/NotiBridge.app`.
-- NotiBridge is not signed, notarized, or distributed via Homebrew yet.
+- A copy downloaded from the releases page is quarantined, so Gatekeeper shows
+  *"cannot be opened because the developer cannot be verified"*.
+- The supported way to open it: **Control-click → Open** in the Finder, then
+  confirm **Open**. If that is not offered, **System Settings → Privacy &
+  Security → Open Anyway**.
+- As a last resort for a single app:
+  `xattr -dr com.apple.quarantine /Applications/NotiBridge.app`.
+
+Only approve an app whose checksum matched the published `SHA256SUMS`, and
+only from the project's releases page. Never disable Gatekeeper system-wide
+(`spctl --master-disable`) for this — that removes the protection for every
+application on the Mac.
+
+See [docs/INSTALL.md](INSTALL.md) for the complete installation walkthrough.
+
+## The updater does not find a new version
+
+- NotiBridge only checks **when you ask**: menu bar → *Check for updates…*.
+  There is no background polling, so nothing is ever fetched silently.
+- The check talks to the GitHub API. Unauthenticated requests are rate limited
+  per IP; the error message says so when the limit is hit — wait a few
+  minutes.
+- Only stable releases are considered. A pre-release (tagged `v0.2.0-rc.1`)
+  is ignored until it is published as a normal release.
+
+## The updater refuses to install an update
+
+| Message | Fix |
+|---|---|
+| `checksum mismatch for …` | Do not install. Re-download and report it — the archive does not match the published checksum |
+| `the release signature is not valid for the embedded public key` | Do not install. The release is not signed by the key this build expects; report it |
+| `release X publishes no signature and the embedded public key requires one` | The release was published without a signature; report it |
+| `manual installation required` | The application folder is not writable. Replace `/Applications/NotiBridge.app` by hand — see [docs/UPDATING.md](UPDATING.md) |
+
+The helper that performs the swap logs to `/tmp/notibridge-update.log`.
 
 ## Reset everything
 

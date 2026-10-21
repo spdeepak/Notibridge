@@ -207,7 +207,7 @@ func TestEndToEndForwardAndDedup(t *testing.T) {
 	})
 
 	waitFor(t, 10*time.Second, func() bool { return tc.count() == 1 }, "first delivery")
-	if !strings.Contains(tc.last(), "Hello") || !strings.Contains(tc.last(), "com.whatsapp.WhatsApp") {
+	if !strings.Contains(tc.last(), "Hello") || !strings.Contains(tc.last(), "<b>App:</b> WhatsApp") {
 		t.Errorf("message = %q", tc.last())
 	}
 
