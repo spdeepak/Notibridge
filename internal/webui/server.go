@@ -156,13 +156,14 @@ type activityRow struct {
 }
 
 type settingsForm struct {
-	ChatID        string
-	PollSeconds   string
-	RetentionDays string
-	MaxAttempts   string
-	Exclusions    string
-	Forwarding    bool
-	HasToken      bool
+	ChatID         string
+	PollSeconds    string
+	RetentionDays  string
+	MaxAttempts    string
+	Exclusions     string
+	Forwarding     bool
+	OnlyWhenLocked bool
+	HasToken       bool
 }
 
 func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
@@ -182,12 +183,13 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 		Status:  st,
 		Update:  s.svc.UpdateStatus(),
 		Form: settingsForm{
-			ChatID:        "",
-			PollSeconds:   strconv.Itoa(st.PollIntervalSecs),
-			RetentionDays: "14",
-			MaxAttempts:   "8",
-			Forwarding:    st.ForwardingEnabled,
-			HasToken:      strings.Contains(r.URL.RawQuery, "t="), // token never round-trips into the form
+			ChatID:         "",
+			PollSeconds:    strconv.Itoa(st.PollIntervalSecs),
+			RetentionDays:  "14",
+			MaxAttempts:    "8",
+			Forwarding:     st.ForwardingEnabled,
+			OnlyWhenLocked: true,
+			HasToken:       strings.Contains(r.URL.RawQuery, "t="), // token never round-trips into the form
 		},
 	}
 	if cfg, err := config.Load(); err == nil {
@@ -196,6 +198,7 @@ func (s *Server) handlePage(w http.ResponseWriter, r *http.Request) {
 		data.Form.MaxAttempts = strconv.Itoa(cfg.MaxAttempts)
 		data.Form.Exclusions = strings.Join(cfg.ExcludedApps, "\n")
 		data.Form.Forwarding = cfg.ForwardingEnabled
+		data.Form.OnlyWhenLocked = cfg.OnlyWhenScreenLocked
 	}
 	if rows, err := s.svc.RecentDeliveries(r.Context(), 25); err == nil {
 		for _, d := range rows {
@@ -255,6 +258,7 @@ func (s *Server) handleSaveSettings(w http.ResponseWriter, r *http.Request) {
 		ExcludedApps:         splitLines(r.FormValue("exclusions")),
 		HistoryRetentionDays: atoiDefault(r.FormValue("retention_days"), 14),
 		MaxAttempts:          atoiDefault(r.FormValue("max_attempts"), 8),
+		OnlyWhenScreenLocked: r.FormValue("only_when_locked") == "on",
 	}
 	if tok := strings.TrimSpace(r.FormValue("bot_token")); tok != "" {
 		if strings.Contains(tok, "…") || tok == "(unchanged)" {
@@ -456,6 +460,7 @@ const pageHTML = `<!DOCTYPE html>
   {{if .Status.Configured}}<span class="badge ok">Configured</span>{{else}}<span class="badge bad">Not configured</span>{{end}}
   {{if .Status.Paused}}<span class="badge warn">Paused</span>{{else}}<span class="badge ok">Not paused</span>{{end}}
   {{if .Status.ForwardingEnabled}}<span class="badge ok">Forwarding on</span>{{else}}<span class="badge warn">Forwarding off</span>{{end}}
+  {{if .Status.OnlyWhenScreenLocked}}{{if .Status.ScreenLocked}}<span class="badge ok">Screen locked</span>{{else}}<span class="badge warn">Screen unlocked — notifications are ignored</span>{{end}}{{end}}
   {{if .Status.SourceAccessible}}<span class="badge ok">Notification DB readable</span>{{else}}<span class="badge bad">Notification DB inaccessible</span>{{end}}
 </p>
 <p class="muted">
@@ -484,6 +489,7 @@ const pageHTML = `<!DOCTYPE html>
   <label for="exclusions">Excluded apps (bundle IDs, one per line; <code>com.example.*</code> wildcards allowed)</label>
   <textarea id="exclusions" name="exclusions" placeholder="com.apple.Safari">{{.Form.Exclusions}}</textarea>
   <label><input type="checkbox" name="forwarding" {{if .Form.Forwarding}}checked{{end}}> Forward notifications to Telegram</label>
+  <label><input type="checkbox" name="only_when_locked" {{if .Form.OnlyWhenLocked}}checked{{end}}> Only forward notifications while the screen is locked (notifications that arrive while the screen is unlocked are ignored)</label>
   <button type="submit">Save settings</button>
 </form>
 

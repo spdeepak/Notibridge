@@ -47,6 +47,8 @@ fi
 echo "==> Building release binary (darwin/$ARCH, CGO for the menu bar)"
 mkdir -p "$DIST"
 build() { # build <goarch> <output>
+  # go build refuses to overwrite an existing file that is not a Go archive.
+  rm -f "$2"
   GOOS=darwin GOARCH="$1" CGO_ENABLED=1 \
     go build -trimpath -ldflags "$LDFLAGS" -o "$2" ./cmd/notifyrelay
 }
@@ -58,6 +60,7 @@ case "$ARCH" in
   universal)
     build arm64 "$DIST/NotiBridge.arm64"
     build amd64 "$DIST/NotiBridge.amd64"
+    rm -f "$DIST/NotiBridge"
     lipo -create -output "$DIST/NotiBridge" "$DIST/NotiBridge.arm64" "$DIST/NotiBridge.amd64"
     rm -f "$DIST/NotiBridge.arm64" "$DIST/NotiBridge.amd64"
     ;;

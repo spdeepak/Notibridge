@@ -36,6 +36,7 @@ Each package has exactly one responsibility. Keep it that way.
 | `internal/dedup` | Computes durable keys: `u:<uuid>` when a record UUID exists, else `f:<sha256 fingerprint>`. Contains the documented fingerprint-collision limitation. |
 | `internal/storage` | The app's own SQLite DB (`state.db`): migrations (`schemaVersion` + `migrations` slice), `deliveries` + `meta` tables, purge/clear. Single pooled connection (see Concurrency). |
 | `internal/queue` | Durable delivery queue: atomic `Enqueue` (INSERT OR IGNORE = dedup), `ClaimDue`, `MarkSent`/`MarkRetry`/`MarkFailed`, jittered exponential `BackoffDelay`, `Counts`, `Recent`. |
+| `internal/screenlock` | Screen lock state (`State` interface + cgo `MacOS()` reading `CGSSessionScreenIsLocked`). Injectable via `app.Options.LockState`. |
 | `internal/telegram` | Bot API client (`getMe`, `sendMessage`), typed `APIError`/`TransportError` with `Retryable()`, token redaction, `Format()` (HTML-escaped message rendering). |
 | `internal/config` | `Config` load/save/validate, `SecretString` (unprintable), `SecretStore` interface with Keychain (`KeyringStore`) and 0600-file (`FileStore`) backends. |
 | `internal/app` | `Service`: wires everything; poller, delivery worker, retention loops, watermark persistence, status snapshots, pause/resume, lifecycle. No UI imports. |
@@ -122,6 +123,11 @@ Data flow: `MacOSSource.Poll` → `parser.Parse` → `filters` → `dedup.Key` �
   5 min) so a fresh install does not replay history.
 - Parsing failures skip the record with a debug log (rec_id only, no
   payload). Excluded apps are counted, not logged individually.
+- The screen lock restriction (`Config.OnlyWhenScreenLocked`, **on by default**)
+  is applied at *poll* time: while the screen is unlocked the records of that
+  poll are dropped (not postponed) and the watermark still advances. The state
+  comes from `screenlock.MacOS()`; tests inject a fake through
+  `app.Options.LockState`.
 
 ## Telegram integration
 

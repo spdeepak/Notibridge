@@ -64,6 +64,8 @@ message. This is at-least-once delivery, not exactly-once.
   exponential backoff + jitter, and a retry budget for persistent failures
 - ✅ Test connection (`getMe`) and **Send test message** actions
 - ⏸️ Pause/resume instantly; master forwarding switch (persisted)
+- 🔒 Forwards **only while the screen is locked** (on by default): notifications
+  that arrive while you are at the Mac are ignored
 - 🚫 App exclusions (`com.apple.*` wildcards supported)
 - 🧹 Configurable local history retention (default 14 days) + one-click
   **Clear local history**
@@ -188,6 +190,24 @@ Notes:
   the database, you can read what apps stored in it. That's exactly why
   NotiBridge treats the data as sensitive (see Privacy below).
 
+## Forwarding only while the screen is locked
+
+By default NotiBridge **forwards a notification only while your screen is
+locked**. While you are at the Mac, notifications are **ignored**: they are not
+sent to Telegram — and they are **not postponed** either. The polling watermark
+still advances, so a notification that arrived while you were working is never
+delivered later.
+
+Turn the restriction off in the menu bar (**Only forward while the screen is
+locked**) or on the settings page (**Only forward notifications while the
+screen is locked**). The menu bar and the settings page also show the current
+lock state, so "nothing arrives" is never a mystery.
+
+The state comes from the macOS session dictionary (`CGSSessionScreenIsLocked`)
+and needs no extra permission. The check happens when a poll picks the
+notification up: a notification that arrives while the screen is locked but is
+read a moment after you unlocked the Mac is treated as ignored.
+
 ## How deduplication works
 
 | Record has UUID | Dedup key |
@@ -311,6 +331,8 @@ The GitHub Actions workflows (`.github/workflows/ci.yml` and
   [docs/INSTALL.md](docs/INSTALL.md).
 - The update check is **manual** — NotiBridge never polls for updates in the
   background.
+- With the screen lock restriction on (the default), notifications that arrive
+  while the screen is unlocked are **dropped, not queued**.
 - Single-user, single-chat, no cloud sync (by design for the MVP).
 
 ## License

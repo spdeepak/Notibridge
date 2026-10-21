@@ -21,6 +21,37 @@ func TestDefaultIsValid(t *testing.T) {
 	}
 }
 
+// TestOnlyWhenScreenLockedDefaultsOn checks that the screen lock restriction
+// is on by default, also for config files written before the setting existed.
+func TestOnlyWhenScreenLockedDefaultsOn(t *testing.T) {
+	if !Default().OnlyWhenScreenLocked {
+		t.Error("the screen lock restriction must be on by default")
+	}
+
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"chat_id":"42"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadPath(path)
+	if err != nil {
+		t.Fatalf("LoadPath: %v", err)
+	}
+	if !cfg.OnlyWhenScreenLocked {
+		t.Error("a config file without the setting must keep the restriction on")
+	}
+
+	if err := os.WriteFile(path, []byte(`{"chat_id":"42","only_when_screen_locked":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = LoadPath(path)
+	if err != nil {
+		t.Fatalf("LoadPath: %v", err)
+	}
+	if cfg.OnlyWhenScreenLocked {
+		t.Error("only_when_screen_locked=false must be honored")
+	}
+}
+
 func TestValidation(t *testing.T) {
 	cases := []struct {
 		name    string

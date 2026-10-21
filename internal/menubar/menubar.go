@@ -54,6 +54,7 @@ func Run(svc *app.Service, web *webui.Server, logger *slog.Logger, onExit func()
 
 		pauseItem := systray.AddMenuItemCheckbox("Pause forwarding", "Stop sending notifications to Telegram (queued items are kept)", false)
 		forwardItem := systray.AddMenuItemCheckbox("Forwarding enabled", "Master switch, persisted in settings", false)
+		lockItem := systray.AddMenuItemCheckbox("Only forward while the screen is locked", "Ignore notifications that arrive while the screen is unlocked", false)
 		testItem := systray.AddMenuItem("Send test message", "Send a test message to the configured Telegram chat")
 
 		systray.AddSeparator()
@@ -82,6 +83,13 @@ func Run(svc *app.Service, web *webui.Server, logger *slog.Logger, onExit func()
 					st := svc.Status()
 					if err := svc.SetForwarding(ctx, !st.ForwardingEnabled); err != nil {
 						logger.Warn("could not change forwarding setting", "error", err)
+					}
+					cancel()
+				case <-lockItem.ClickedCh:
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					st := svc.Status()
+					if err := svc.SetOnlyWhenLocked(ctx, !st.OnlyWhenScreenLocked); err != nil {
+						logger.Warn("could not change the screen lock setting", "error", err)
 					}
 					cancel()
 				case <-testItem.ClickedCh:
@@ -147,6 +155,7 @@ func Run(svc *app.Service, web *webui.Server, logger *slog.Logger, onExit func()
 					pauseItem.SetTitle("Pause forwarding")
 				}
 				setChecked(forwardItem, st.ForwardingEnabled)
+				setChecked(lockItem, st.OnlyWhenScreenLocked)
 			}
 		}()
 	}, cleanup)
@@ -190,6 +199,9 @@ func statusTitle(st app.Status) string {
 	case !st.SourceAccessible:
 		return "Status: notification database inaccessible"
 	default:
+		if st.OnlyWhenScreenLocked && !st.ScreenLocked {
+			return "Status: screen unlocked — notifications are ignored"
+		}
 		return "Status: monitoring & forwarding"
 	}
 }

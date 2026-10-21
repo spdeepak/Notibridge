@@ -95,7 +95,24 @@ Check the menu bar status line:
 | `forwarding disabled` | Master switch off → toggle in the menu or Settings |
 | `paused` | Paused; queued items are delivered on resume |
 | `notification database inaccessible` | See the TCC section above |
+| `screen unlocked — notifications are ignored` | The screen lock restriction is on and the screen is unlocked; notifications arriving now are dropped (not postponed) |
 | `monitoring & forwarding` | Healthy; check Recent activity for per-message outcomes |
+
+## "Nothing arrives while I am at the Mac"
+
+This is the default behaviour, not a bug: NotiBridge forwards a notification
+only while the screen is **locked**. While the screen is unlocked, arriving
+notifications are ignored and the watermark advances, so they are never
+delivered later.
+
+- The menu bar shows `screen unlocked — notifications are ignored` while the
+  restriction is on and the screen is unlocked; the settings page shows the
+  same as a badge.
+- Turn it off: menu bar → **Only forward while the screen is locked**, or the
+  checkbox **Only forward notifications while the screen is locked** on the
+  settings page.
+- Lock the screen (⌘L) to test forwarding. Notifications that arrive while the
+  screen is locked are forwarded as usual.
 
 ## Startup / Gatekeeper notes
 

@@ -164,6 +164,43 @@ func TestUpdateEndpointsRequireToken(t *testing.T) {
 	}
 }
 
+// TestSettingsScreenLockToggle checks that the settings page offers the
+// screen lock checkbox and that saving it persists the choice.
+func TestSettingsScreenLockToggle(t *testing.T) {
+	api := releasesStub(t, "v99.0.0")
+	s := newTestServer(t, api)
+	tok := tokenOf(t, s.URL())
+
+	res, err := noRedirect().Get(s.baseURL() + "/?t=" + url.QueryEscape(tok))
+	if err != nil {
+		t.Fatalf("get page: %v", err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	if !strings.Contains(string(body), `name="only_when_locked"`) {
+		t.Error("the settings page does not offer the screen lock setting")
+	}
+
+	// An unchecked checkbox is not submitted, so the restriction is turned off.
+	form := url.Values{"t": {tok}, "chat_id": {"42"}, "poll_seconds": {"2"},
+		"retention_days": {"14"}, "max_attempts": {"8"}}
+	res, err = noRedirect().PostForm(s.baseURL()+"/settings", form)
+	if err != nil {
+		t.Fatalf("post form: %v", err)
+	}
+	res.Body.Close()
+	if res.StatusCode != http.StatusSeeOther {
+		t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusSeeOther)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("config.Load: %v", err)
+	}
+	if cfg.OnlyWhenScreenLocked {
+		t.Error("the checkbox was not submitted, so the restriction must be off")
+	}
+}
+
 // TestUpdateInstallWithoutDownload reports that nothing is staged instead of
 // pretending an update was installed.
 func TestUpdateInstallWithoutDownload(t *testing.T) {
