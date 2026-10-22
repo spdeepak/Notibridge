@@ -268,7 +268,8 @@ internal/
   dedup/                            dedup keys (UUID + fingerprint)
   filters/                          app exclusion rules
   logging/                          slog setup + secret redaction
-  menubar/                          menu bar UI (fyne/systray) + icon
+  menubar/                          menu bar UI (fyne/systray) + embedded
+                                    template icon (icon.png, generated)
   notifications/
     model.go                        shared notification model
     parser/                         binary plist decoding

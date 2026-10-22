@@ -7,13 +7,14 @@
 //
 // Usage:
 //
-//	go run ./scripts/make_icons [source] [output-dir]
+//	go run ./scripts/make_icons [source] [output-dir] [menu-bar-icon]
 //
-// Defaults: source "image.png", output-dir "assets/icons".
+// Defaults: source "image.png", output-dir "assets/icons", menu-bar-icon
+// "internal/menubar/icon.png".
 //
-// It writes an .iconset (the intermediate format iconutil consumes) and the
-// final NotiBridge.icns. Both use only the Go standard library, so the
-// release build needs no extra tooling.
+// It writes an .iconset (the intermediate format iconutil consumes), the
+// final NotiBridge.icns, and the menu bar template image. Both use only the
+// Go standard library, so the release build needs no extra tooling.
 package main
 
 import (
@@ -53,6 +54,10 @@ var iconSizes = []struct {
 // .icns files themselves.
 const cornerRadiusRatio = 0.2237
 
+// menuBarSize is the pixel size of the menu bar template image. systray sizes
+// every menu bar image to 16 points, so 32 pixels is the Retina rendering.
+const menuBarSize = 32
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, "make_icons:", err)
@@ -63,19 +68,26 @@ func main() {
 func run(args []string) error {
 	source := "image.png"
 	outDir := filepath.Join("assets", "icons")
+	menuBarIcon := filepath.Join("internal", "menubar", "icon.png")
 	if len(args) > 0 {
 		source = args[0]
 	}
 	if len(args) > 1 {
 		outDir = args[1]
 	}
+	if len(args) > 2 {
+		menuBarIcon = args[2]
+	}
 
-	src, err := loadSource(source)
+	loaded, err := loadSource(source)
 	if err != nil {
 		return err
 	}
-	bounds := src.Bounds()
-	fmt.Printf("source %s: %dx%d\n", source, bounds.Dx(), bounds.Dy())
+	bounds := loaded.Bounds()
+	src := cropToContent(loaded)
+	art := src.Bounds()
+	fmt.Printf("source %s: %dx%d, artwork %dx%d\n",
+		source, bounds.Dx(), bounds.Dy(), art.Dx(), art.Dy())
 
 	iconset := filepath.Join(outDir, "NotiBridge.iconset")
 	if err := os.RemoveAll(iconset); err != nil {
@@ -98,7 +110,129 @@ func run(args []string) error {
 		return err
 	}
 	fmt.Printf("wrote %s (%d bytes)\n", icns, fileSize(icns))
+
+	if err := writeMenuBarTemplate(src, menuBarIcon); err != nil {
+		return err
+	}
+	fmt.Printf("wrote %s (%d bytes)\n", menuBarIcon, fileSize(menuBarIcon))
 	return nil
+}
+
+// cropToContent trims the backdrop around a designed icon so the artwork fills
+// the canvas; a source that already fills its canvas is returned unchanged.
+// Without this an icon drawn as a small tile on a large pale backdrop renders
+// as an almost blank square at 16 point.
+func cropToContent(src image.Image) image.Image {
+	b := src.Bounds()
+	threshold := backdropLuminance(src) - 60
+	minX, minY := b.Max.X, b.Max.Y
+	maxX, maxY := b.Min.X-1, b.Min.Y-1
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if luminance(src.At(x, y)) >= threshold {
+				continue
+			}
+			if x < minX {
+				minX = x
+			}
+			if y < minY {
+				minY = y
+			}
+			if x > maxX {
+				maxX = x
+			}
+			if y > maxY {
+				maxY = y
+			}
+		}
+	}
+	if maxX < minX {
+		return src
+	}
+	r := image.Rect(minX, minY, maxX+1, maxY+1)
+	// Keep the crop square so resampling a non-square artwork cannot distort
+	// it.
+	if d := r.Dx() - r.Dy(); d > 0 {
+		r.Min.Y -= d / 2
+		r.Max.Y += d - d/2
+	} else if d < 0 {
+		d = -d
+		r.Min.X -= d / 2
+		r.Max.X += d - d/2
+	}
+	r = r.Intersect(b)
+	// A crop that keeps less than 40% of the canvas is more likely a stray dark
+	// detail than the artwork itself.
+	if r.Dx() < b.Dx()*2/5 || r.Dy() < b.Dy()*2/5 {
+		return src
+	}
+	return crop(src, r)
+}
+
+// backdropLuminance estimates the brightness of the empty backdrop around the
+// artwork from the outer one percent of the image.
+func backdropLuminance(src image.Image) float64 {
+	b := src.Bounds()
+	m := b.Dx() / 100
+	if m < 1 {
+		m = 1
+	}
+	var sum float64
+	var n int
+	for y := b.Min.Y; y < b.Max.Y; y++ {
+		for x := b.Min.X; x < b.Max.X; x++ {
+			if x-b.Min.X >= m && b.Max.X-x > m && y-b.Min.Y >= m && b.Max.Y-y > m {
+				continue
+			}
+			sum += luminance(src.At(x, y))
+			n++
+		}
+	}
+	if n == 0 {
+		return 255
+	}
+	return sum / float64(n)
+}
+
+// luminance returns the perceived brightness of c, 0-255.
+func luminance(c color.Color) float64 {
+	r, g, b, _ := c.RGBA()
+	return float64((299*uint64(r) + 587*uint64(g) + 114*uint64(b)) / 1000 >> 8)
+}
+
+// crop returns the part of src inside r.
+func crop(src image.Image, r image.Rectangle) image.Image {
+	dst := image.NewRGBA(image.Rect(0, 0, r.Dx(), r.Dy()))
+	for y := 0; y < r.Dy(); y++ {
+		for x := 0; x < r.Dx(); x++ {
+			dst.Set(x, y, src.At(r.Min.X+x, r.Min.Y+y))
+		}
+	}
+	return dst
+}
+
+// writeMenuBarTemplate writes a macOS template image for the menu bar: the
+// artwork's darkness becomes alpha, so macOS draws it black on a light menu bar
+// and white on a dark one.
+func writeMenuBarTemplate(src image.Image, path string) error {
+	scaled := image.NewRGBA(image.Rect(0, 0, menuBarSize, menuBarSize))
+	resampleArea(src, scaled)
+	out := image.NewNRGBA(scaled.Bounds())
+	for y := 0; y < menuBarSize; y++ {
+		for x := 0; x < menuBarSize; x++ {
+			var a uint8
+			switch l := luminance(scaled.At(x, y)); {
+			case l <= 80:
+				a = 255
+			case l >= 200:
+				a = 0
+			default:
+				a = uint8((200 - l) * 255 / 120)
+			}
+			out.SetNRGBA(x, y, color.NRGBA{A: a})
+		}
+	}
+	return writePNG(path, out)
 }
 
 // loadSource decodes the source image, choosing the decoder by content so

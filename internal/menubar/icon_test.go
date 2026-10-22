@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-func TestGenerateIconIsDecodablePNG(t *testing.T) {
-	data := generateIcon()
+func TestMenuBarIconIsDecodablePNG(t *testing.T) {
+	data := menuBarIcon()
 	if len(data) == 0 {
 		t.Fatal("empty icon")
 	}
@@ -15,16 +15,19 @@ func TestGenerateIconIsDecodablePNG(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode icon png: %v", err)
 	}
-	if img.Bounds().Dx() != iconSize || img.Bounds().Dy() != iconSize {
+	if img.Bounds().Dx() != 32 || img.Bounds().Dy() != 32 {
 		t.Errorf("icon size = %v", img.Bounds())
 	}
-	// The icon must contain both inked and transparent pixels (a glyph, not
-	// a solid square).
+	// A template image must contain both inked and transparent pixels (a
+	// glyph, not a solid square) and no colour: macOS tints the alpha channel.
 	var inked, clear int
 	b := img.Bounds()
 	for y := b.Min.Y; y < b.Max.Y; y++ {
 		for x := b.Min.X; x < b.Max.X; x++ {
-			_, _, _, a := img.At(x, y).RGBA()
+			r, g, bl, a := img.At(x, y).RGBA()
+			if r != 0 || g != 0 || bl != 0 {
+				t.Fatalf("pixel (%d,%d) is not black: %d,%d,%d", x, y, r>>8, g>>8, bl>>8)
+			}
 			if a > 128 {
 				inked++
 			} else {

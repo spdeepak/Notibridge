@@ -40,7 +40,7 @@ Each package has exactly one responsibility. Keep it that way.
 | `internal/telegram` | Bot API client (`getMe`, `sendMessage`), typed `APIError`/`TransportError` with `Retryable()`, token redaction, `Format()` (HTML-escaped message rendering). |
 | `internal/config` | `Config` load/save/validate, `SecretString` (unprintable), `SecretStore` interface with Keychain (`KeyringStore`) and 0600-file (`FileStore`) backends. |
 | `internal/app` | `Service`: wires everything; poller, delivery worker, retention loops, watermark persistence, status snapshots, pause/resume, lifecycle. No UI imports. |
-| `internal/menubar` | fyne/systray menu + runtime-generated icon. Renders `app.Status`, forwards actions. |
+| `internal/menubar` | fyne/systray menu + template icon embedded from `icon.png` (generated from `image.png` by `make icons`). Renders `app.Status`, forwards actions. |
 | `internal/webui` | Loopback (127.0.0.1, random port, random session token) settings/activity page. |
 | `internal/logging` | slog handler that redacts registered secrets from messages *and* attributes. |
 | `internal/update` | Release check against GitHub Releases, SHA-256 + Ed25519 verification, download, staging and bundle swap. No UI imports. |
@@ -62,9 +62,10 @@ Data flow: `MacOSSource.Poll` → `parser.Parse` → `filters` → `dedup.Key` �
   `TelegramBaseURL`, `DBPath`).
 - `packaging/Info.plist` + `scripts/package_app.sh` produce
   `dist/NotiBridge.app` (LSUIElement, ad-hoc signed) and the release archive
-  `dist/NotiBridge_<version>_<arch>.zip`. `scripts/make_icons` derives
-  `assets/icons/NotiBridge.icns` from the repository's `image.png` (never
-  modify that file); `scripts/sign_release` signs release checksums.
+  `dist/NotiBridge_<version>_<arch>.zip`. `scripts/make_icons` crops the
+  repository's `image.png` (never modify that file) to its artwork tile and
+  derives both `assets/icons/NotiBridge.icns` and the menu bar template
+  `internal/menubar/icon.png`; `scripts/sign_release` signs release checksums.
   `Makefile` targets: `build dev test vet fmt check diagnose release bundle
   package-amd64 package-universal icons version clean`.
 

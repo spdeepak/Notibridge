@@ -80,8 +80,9 @@ PLIST="$APP/Contents/Info.plist"
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $VERSION" "$PLIST"
 
 # No Dock icon is needed: Info.plist sets LSUIElement, so NotiBridge lives
-# only in the menu bar (with a runtime-generated template icon). The .icns is
-# the Finder/bundle icon.
+# only in the menu bar (with the template icon generated from image.png by
+# `make icons` and embedded in the binary). The .icns is the Finder/bundle
+# icon, generated from the same artwork.
 
 echo "==> Ad-hoc code signing (no Developer ID; Gatekeeper will still warn on other Macs)"
 codesign --force --sign - "$APP"

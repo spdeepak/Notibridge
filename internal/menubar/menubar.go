@@ -39,7 +39,7 @@ func Run(svc *app.Service, web *webui.Server, logger *slog.Logger, onExit func()
 	}()
 
 	systray.Run(func() {
-		systray.SetTemplateIcon(generateIcon(), generateIcon())
+		systray.SetTemplateIcon(menuBarIcon(), menuBarIcon())
 		systray.SetTitle("")
 		systray.SetTooltip("NotiBridge — macOS notifications → Telegram")
 
